@@ -10,6 +10,7 @@ import static org.owasp.webgoat.container.assignments.AttackResultBuilder.succes
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.owasp.webgoat.lessons.commandinjection.CommandExecutionService.CommandExecutionResult;
 import org.owasp.webgoat.container.CurrentUser;
 import org.owasp.webgoat.container.assignments.AssignmentEndpoint;
@@ -28,6 +29,7 @@ public class CommandInjectionTask2 implements AssignmentEndpoint {
 
   static final String LEAKED_TOKEN =
       String.format(Locale.ROOT, "WEBGOAT_BUILD_TOKEN=%s", UUID.randomUUID().toString());
+  private static final Pattern SAFE_COMMAND_PATTERN = Pattern.compile("^[A-Za-z0-9_./:=\\- ]+$");
 
   private final CommandExecutionService commandExecutionService;
   private final CommandInjectionSafetyService safetyService;
@@ -50,6 +52,17 @@ public class CommandInjectionTask2 implements AssignmentEndpoint {
       @RequestParam(value = "token", required = false) String token) {
 
     safetyService.requireAcknowledgement(user);
+
+    try {
+      baseCommand = sanitizeCommandInput(baseCommand);
+      payload = sanitizeCommandInput(payload);
+    } catch (IllegalArgumentException e) {
+      return failed(this)
+          .feedback("commandinjection.task2.failure.mismatch")
+          .output("Command rejected: unsafe characters detected.")
+          .build();
+    }
+
     String command = buildCommand(baseCommand, payload);
     CommandExecutionResult result =
         commandExecutionService.execute(null, command, Map.of("WEBGOAT_BUILD_TOKEN", LEAKED_TOKEN));
@@ -66,12 +79,29 @@ public class CommandInjectionTask2 implements AssignmentEndpoint {
     return failed(this).feedback("commandinjection.task2.failure.mismatch").output(output).build();
   }
 
+  private String sanitizeCommandInput(String value) {
+    if (value == null) {
+      return "";
+    }
+
+    String trimmed = value.trim();
+    if (trimmed.isEmpty()) {
+      return "";
+    }
+
+    if (!SAFE_COMMAND_PATTERN.matcher(trimmed).matches()) {
+      throw new IllegalArgumentException("Unsafe command characters detected");
+    }
+
+    return trimmed;
+  }
+
   String buildCommand(String base, String payload) {
     String safeBase =
         (base == null || base.isBlank())
             ? (CommandExecutionService.isWindows() ? "ver" : "uname -a")
-            : base;
-    String userPart = (payload == null) ? "" : payload.trim();
+            : sanitizeCommandInput(base);
+    String userPart = sanitizeCommandInput(payload);
     return safeBase + (userPart.isEmpty() ? "" : " " + userPart);
   }
 
